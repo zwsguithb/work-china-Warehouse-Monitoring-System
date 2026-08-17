@@ -16,6 +16,35 @@
   </header>
 
   <main class="container">
+    <!-- 领星 ERP 数据接入 -->
+    <section class="card" id="lingxingCard">
+      <h2>⑤ 领星 ERP 数据接入 <span class="sub" id="lxStatusBadge">状态加载中…</span></h2>
+      <div class="lx-row">
+        <button id="lxSyncBtn" class="btn btn-primary">立即从领星同步</button>
+        <button id="lxTestBtn" class="btn">测试连接</button>
+        <span id="lxLastSync" class="sub"></span>
+        <span id="lxMsg" class="msg"></span>
+      </div>
+      <details>
+        <summary>领星对接设置（凭证获取：领星 ERP → 设置 → 业务配置 → 全局 → 开放接口）</summary>
+        <div class="lx-form">
+          <label>AppId<input id="lxAppId" type="text" placeholder="领星开放接口 AppId"></label>
+          <label>AppSecret<input id="lxAppSecret" type="password" placeholder="领星开放接口 AppSecret"></label>
+          <label>Host<input id="lxHost" type="text" placeholder="https://openapi.lingxing.com"></label>
+          <label>亚马逊店铺 sid（逗号分隔）<input id="lxSidsAmazon" type="text"></label>
+          <label>沃尔玛店铺 sid<input id="lxSidsWalmart" type="text"></label>
+          <label>其他平台店铺 sid<input id="lxSidsOther" type="text"></label>
+          <label>temu 店铺 sid<input id="lxSidsTemu" type="text"></label>
+          <label class="checkbox">自动同步
+            <select id="lxAutoSync"><option value="0">关闭</option><option value="1">开启（每日定时）</option></select>
+          </label>
+          <label>每日同步时间(小时 0-23)<input id="lxSyncHour" type="number" min="0" max="23" value="8"></label>
+          <button id="lxSaveBtn" class="btn">保存设置</button>
+        </div>
+        <p class="sub">注意：需在领星开放接口后台把本系统部署服务器的外网 IP 加入白名单，否则无法访问。</p>
+      </details>
+    </section>
+
     <!-- 淘汰款板块 -->
     <section class="card">
       <h2>① 淘汰款板块 <span class="sub">生命周期=淘汰期（含未上传默认淘汰期）</span></h2>

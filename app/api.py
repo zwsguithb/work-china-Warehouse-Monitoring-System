@@ -11,6 +11,7 @@ import io
 from . import calc
 from .database import get_conn
 from .data_import import import_sales, import_inventory, import_lifecycle, ensure_default_lifecycle
+from . import lingxing
 
 router = APIRouter()
 
@@ -34,6 +35,81 @@ async def sync_data(file: UploadFile = File(...), kind: str = "sales"):
     finally:
         os.unlink(tmp_path)
     return {"ok": True, "imported_rows": n}
+
+
+# ---------------- 领星 ERP 自动对接 ----------------
+@router.post("/api/data/sync/lingxing")
+def sync_lingxing():
+    """立即从领星 ERP 自动拉取销售/库存数据。"""
+    return lingxing.sync_from_lingxing()
+
+
+@router.get("/api/lingxing/status")
+def lingxing_status():
+    """查看领星对接状态（不返回密钥明文）。"""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT param_key, param_value FROM config WHERE param_key LIKE 'lingxing_%'"
+    ).fetchall()
+    cfg = {r["param_key"]: r["param_value"] for r in rows}
+    conn.close()
+    has_secret = bool(cfg.get("lingxing_app_secret"))
+    return {
+        "configured": has_secret and bool(cfg.get("lingxing_app_id")),
+        "app_id_set": bool(cfg.get("lingxing_app_id")),
+        "app_secret_set": has_secret,
+        "host": cfg.get("lingxing_host", "https://openapi.lingxing.com"),
+        "sids_amazon": cfg.get("lingxing_sids_amazon", ""),
+        "sids_walmart": cfg.get("lingxing_sids_walmart", ""),
+        "sids_other": cfg.get("lingxing_sids_other", ""),
+        "sids_temu": cfg.get("lingxing_sids_temu", ""),
+        "auto_sync": cfg.get("lingxing_auto_sync", "0"),
+        "auto_sync_hour": cfg.get("lingxing_auto_sync_hour", "8"),
+        "last_sync": cfg.get("lingxing_last_sync", "从未同步"),
+    }
+
+
+@router.put("/api/lingxing/config")
+def lingxing_config(payload: dict):
+    """配置领星对接参数。可包含：app_id, app_secret, host,
+    sids_amazon, sids_walmart, sids_other, sids_temu（逗号分隔的店铺 sid）,
+    auto_sync(0/1), auto_sync_hour(0-23)。"""
+    allowed = {"lingxing_app_id", "lingxing_app_secret", "lingxing_host",
+               "lingxing_sids_amazon", "lingxing_sids_walmart",
+               "lingxing_sids_other", "lingxing_sids_temu",
+               "lingxing_auto_sync", "lingxing_auto_sync_hour"}
+    conn = get_conn()
+    c = conn.cursor()
+    saved = {}
+    for k, v in payload.items():
+        key = str(k).strip()
+        if key not in allowed:
+            continue
+        if key == "lingxing_app_secret" and (v is None or str(v) == ""):
+            continue  # 不允许用空串覆盖已存密钥
+        c.execute("INSERT OR REPLACE INTO config(param_key,param_value) VALUES(?,?)",
+                  (key, str(v)))
+        saved[key] = "******" if key == "lingxing_app_secret" else str(v)
+    conn.commit()
+    conn.close()
+    return {"ok": True, "saved": saved}
+
+
+@router.post("/api/lingxing/test")
+def lingxing_test(payload: dict = None):
+    """测试领星凭证是否可用。可传 app_id/app_secret/host 临时测试，否则用已存配置。"""
+    payload = payload or {}
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT param_key, param_value FROM config WHERE param_key LIKE 'lingxing_%'"
+    ).fetchall()
+    cfg = {r["param_key"]: r["param_value"] for r in rows}
+    conn.close()
+    return lingxing.test_connection(
+        app_id=payload.get("app_id") or cfg.get("lingxing_app_id"),
+        app_secret=payload.get("app_secret") or cfg.get("lingxing_app_secret"),
+        host=payload.get("host") or cfg.get("lingxing_host"),
+    )
 
 
 @router.post("/api/styles/lifecycle/upload")
