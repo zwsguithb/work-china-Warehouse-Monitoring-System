@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>中国仓库存监控系统</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>中国仓库存监控系统</h1>
+    <div class="topbar-right">
+      <button id="refreshBtn" class="btn">刷新数据</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- 淘汰款板块 -->
+    <section class="card">
+      <h2>① 淘汰款板块 <span class="sub">生命周期=淘汰期（含未上传默认淘汰期）</span></h2>
+      <div class="grid2">
+        <div>
+          <h3>淘汰期款总库存数量 Top10</h3>
+          <table id="elimInvTable"><thead><tr>
+            <th>排名</th><th>款号</th><th>总库存数量</th><th>款号可售天数</th><th>全平台销量</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>淘汰期款近60天全平台销量 Top10</h3>
+          <table id="elim60Table"><thead><tr>
+            <th>排名</th><th>款号</th><th>近60天全平台销量</th><th>总库存数量</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- temu 板块 -->
+    <section class="card">
+      <h2>② 款号 temu 平台板块</h2>
+      <h3>temu 销量前 5 的款号</h3>
+      <table id="temuTable"><thead><tr>
+        <th>排名</th><th>款号</th><th>temu销量(近30天)</th><th>temu库存</th><th>总库存可售天数</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- 亚马逊板块 -->
+    <section class="card">
+      <h2>③ 亚马逊板块</h2>
+      <h3>亚马逊平台销量 Top20</h3>
+      <table id="amazonTable"><thead><tr>
+        <th>排名</th><th>款号</th><th>亚马逊近期销量</th><th>中国仓库存</th><th>该款号可售天数</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <!-- 低库存提醒 -->
+    <section class="card">
+      <h2>④ 低库存提醒模块 <span class="sub">仅监控 爆旺/热销/平销/观察/新品 期</span></h2>
+      <div class="tabs">
+        <button class="tab active" data-tab="sku">按 SKU（可导出）</button>
+        <button class="tab" data-tab="style">按款号</button>
+      </div>
+
+      <div id="tab-sku" class="tabpane">
+        <div class="counts" id="skuCounts"></div>
+        <button id="exportSkuBtn" class="btn">导出低可售天数 SKU 文件(CSV)</button>
+        <table id="lowSkuTable"><thead><tr>
+          <th>SKU</th><th>款号</th><th>生命周期</th><th>可售天数</th><th>阈值</th><th>全平台销量</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+
+      <div id="tab-style" class="tabpane" style="display:none">
+        <div class="counts" id="styleCounts"></div>
+        <table id="lowStyleTable"><thead><tr>
+          <th>款号</th><th>生命周期</th><th>可售天数</th><th>阈值</th><th>全平台销量</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+
+      <div class="legend">
+        提醒阈值：爆旺期 &lt; 90天 ｜ 热销期 &lt; 60天 ｜ 平销/观察期 &lt; 45天 ｜ 新品期 &lt; 35天
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
