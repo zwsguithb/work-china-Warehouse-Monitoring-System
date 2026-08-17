@@ -49,6 +49,14 @@ def init_db():
             param_key   TEXT PRIMARY KEY,
             param_value TEXT
         );
+        CREATE TABLE IF NOT EXISTS sync_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at  TEXT,
+            finished_at TEXT,
+            status      TEXT,
+            detail      TEXT,
+            error       TEXT
+        );
         """
     )
     conn.commit()

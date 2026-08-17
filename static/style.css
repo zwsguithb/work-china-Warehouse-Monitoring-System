@@ -38,6 +38,8 @@ th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: center; }
 th { background: var(--primary); color: #fff; font-weight: 600; }
 tbody tr:nth-child(even) { background: #f7fafc; }
 td.warn { color: var(--warn); background: var(--warnbg); font-weight: 600; }
+td.ok { color: #38a169; font-weight: 600; }
+td.err { color: var(--warn); font-weight: 600; }
 .tabs { margin: 8px 0 12px; }
 .tab {
   background: #edf2f7; border: 1px solid var(--line); padding: 7px 16px;

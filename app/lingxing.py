@@ -5,20 +5,27 @@
   领星 ERP → 设置 → 业务配置 → 全局 → 开放接口
   获取 AppId / AppSecret，并到同一页面把本系统部署服务器的【外网 IP】加入白名单。
 
-已确认的接口事实（2026-08，apidoc.lingxing.com）：
-  鉴权 ： POST {host}/api/auth-server/oauth/access-token   (multipart: appId, appSecret)
-         返回 data.access_token（有效期内约 2 小时，过期自动重新获取）
-  FBA库存： POST {host}/basicOpen/openapi/storage/fbaWarehouseDetail
-  Temu库存：POST {host}/basicOpen/multiplatform/fbt/stockSearch
-  多平台库存(含中国仓/沃尔玛/其他)：POST {host}/basicOpen/multiplatform/full/stockSearch
-  日销量  ：见 DAILY_SALES_PATH（领星有 370+ 接口，日销量端点需按贵司实际 apidoc 校准，
-            候选路径见下方常量注释；字段映射亦在该方法内集中说明，便于一处调整）
+已核实的官方接口路径（apidoc.lingxing.com，2026-08）：
+  鉴权     ： POST {host}/api/auth-server/oauth/access-token
+             （multipart: appId, appSecret）→ data.access_token（约 2 小时有效，过期自动重取）
+  FBA 库存 ： POST {host}/basicOpen/openapi/storage/fbaWarehouseDetail        （v2，亚马逊 FBA）
+  多平台库存： POST {host}/basicOpen/multiplatform/full/stockSearch            （中国仓/沃尔玛/其他，含 storeIdList）
+  Temu 库存 ： POST {host}/basicOpen/multiplatform/fbt/stockSearch             （Temu/FBT）
+  日销量    ： POST {host}/basicOpen/platformStatisticsV2/saleStat/pageList    （按日、按 SKU 维度；V1 已 04.30 下线，必须用 V2）
 
-本模块与 Excel 上传通道并存：
-  - 已配置领星凭证 → 优先用自动拉取；
-  - 未配置 / 调用失败 → 自动跳过该部分并在结果中给出 warning，不破坏系统（仍可走 Excel 兜底）。
+返回结构差异（已分别适配）：
+  FBA       → data.list[]
+  多平台/FBT → data.records[]
+  日销量 V2  → data[]（数组直出）
+  统一由 _list() 兼容 data / data.list / data.records 三种形态。
+
+字段映射为多候选兜底（领星不同店铺/版本字段名略有差异），并支持 LINGXING_DEBUG=1
+打印首条记录真实字段名，便于首次接入时按需校准。
+
+未配置凭证 / 调用失败 → 自动跳过该部分并告警，不破坏系统（仍可走 Excel 兜底）。
 """
 import os
+import json
 import time
 import logging
 from datetime import date, timedelta
@@ -29,17 +36,15 @@ log = logging.getLogger("lingxing")
 
 DEFAULT_HOST = "https://openapi.lingxing.com"
 
-# 日销量接口：领星日销量候选路径（请按 apidoc.lingxing.com 实际接口校准其一）。
-# 常见候选：
-#   /basicOpen/statistics/product/dailySaleList
-#   /erp/sc/routing/product/product/dailySaleList
-#   /basicOpen/statistics/asin/dailySaleList
-# 该路径可通过环境变量 LINGXING_DAILY_SALES_PATH 覆盖，无需改代码。
-DAILY_SALES_PATH = os.environ.get(
-    "LINGXING_DAILY_SALES_PATH", "/basicOpen/statistics/product/dailySaleList"
-)
+# ============ 官方接口路径（常量固化，可用环境变量覆盖） ============
+FBA_STOCK_PATH = os.environ.get("LINGXING_FBA_STOCK_PATH", "/basicOpen/openapi/storage/fbaWarehouseDetail")
+FULL_STOCK_PATH = os.environ.get("LINGXING_FULL_STOCK_PATH", "/basicOpen/multiplatform/full/stockSearch")
+FBT_STOCK_PATH = os.environ.get("LINGXING_FBT_STOCK_PATH", "/basicOpen/multiplatform/fbt/stockSearch")
+DAILY_SALES_PATH = os.environ.get("LINGXING_DAILY_SALES_PATH", "/basicOpen/platformStatisticsV2/saleStat/pageList")
 
-# 领星仓库名关键词 → 本系统 warehouse 桶。命中即归桶；不命中则忽略（如海外 FBA 仓由专门接口处理）。
+DEBUG = os.environ.get("LINGXING_DEBUG") == "1"
+
+# 领星仓库名关键词 → 本系统 warehouse 桶。命中即归桶；不命中则忽略。
 WAREHOUSE_MAP = {
     "中国仓": "中国仓", "国内": "中国仓", "本地仓": "中国仓", "domestic": "中国仓",
     "沃尔玛": "walmart", "wal-mart": "walmart", "walmart": "walmart",
@@ -60,6 +65,14 @@ def _num(v):
         return 0
 
 
+def _first_keys(sample, label):
+    """DEBUG 模式下打印首条记录字段名，便于校准字段映射。"""
+    if not DEBUG or not sample:
+        return
+    keys = list(sample[0].keys()) if isinstance(sample, list) else list(sample.keys())
+    log.warning("[LINGXING_DEBUG] %s 首条字段: %s", label, keys)
+
+
 class LingxingClient:
     def __init__(self, app_id=None, app_secret=None, host=None, timeout=30):
         self.app_id = app_id or os.environ.get("LINGXING_APP_ID")
@@ -69,7 +82,7 @@ class LingxingClient:
         self._token = None
         self._token_exp = 0
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "cwms/1.0"})
+        self.session.headers.update({"User-Agent": "cwms/1.1"})
 
     # ---------- 鉴权 ----------
     def is_configured(self):
@@ -115,14 +128,23 @@ class LingxingClient:
 
     @staticmethod
     def _list(data):
-        """领星返回结构不统一：有时是 data.list，有时直接 data 是数组。统一成 list。"""
-        if isinstance(data.get("data"), list):
-            return data["data"]
-        return (data.get("data") or {}).get("list") or []
+        """兼容三种返回形态：data 为数组 / data.list / data.records。"""
+        d = data.get("data")
+        if isinstance(d, list):
+            return d
+        if isinstance(d, dict):
+            for k in ("list", "records", "items"):
+                if isinstance(d.get(k), list):
+                    return d[k]
+        if isinstance(d, dict) and "list" in d and isinstance(d.get("list"), list):
+            return d["list"]
+        return []
 
     # ---------- 各数据接口 ----------
     def fetch_fba_inventory(self, sid_list, page_size=200):
-        """FBA 总库存（按 SKU 汇总跨 FBA 仓）。返回 {sku: quantity}。"""
+        """FBA 总库存（亚马逊）。返回 {sku: quantity}。
+        FBA 用 sid（逗号分隔字符串）；返回 data.list[]；SKU 取 seller_sku/sku/msku/fnsku，
+        数量取 afn_fulfillable_quantity（可售，用于可售天数计算）。"""
         sids = ",".join(sid_list) if isinstance(sid_list, list) else sid_list
         if not sids:
             raise LingxingError("未配置亚马逊店铺 sid（lingxing_sids_amazon）")
@@ -130,33 +152,16 @@ class LingxingClient:
         offset = 0
         while True:
             payload = {"sid": sids, "offset": offset, "length": page_size, "is_hide_zero_stock": 0}
-            data = self._post("/basicOpen/openapi/storage/fbaWarehouseDetail", payload)
+            data = self._post(FBA_STOCK_PATH, payload)
             lst = self._list(data)
             if not lst:
                 break
+            _first_keys(lst, "FBA")
             for it in lst:
-                sku = it.get("seller_sku") or it.get("sku") or it.get("msku") or it.get("fnsku")
-                qty = _num(it.get("quantity")) or _num(it.get("afn_total")) or 0
-                if sku:
-                    out[sku] = out.get(sku, 0) + qty
-            if len(lst) < page_size:
-                break
-            offset += page_size
-        return out
-
-    def fetch_temu_inventory(self, store_id_list=None, page_size=200):
-        """Temu 库存。返回 {sku: quantity}。"""
-        out = {}
-        offset = 0
-        while True:
-            payload = {"length": page_size, "offset": offset, "storeIdList": store_id_list or []}
-            data = self._post("/basicOpen/multiplatform/fbt/stockSearch", payload)
-            lst = self._list(data)
-            if not lst:
-                break
-            for it in lst:
-                sku = it.get("skc") or it.get("sku") or (it.get("mskuList") or [{}])[0].get("msku")
-                qty = _num(it.get("quantity")) or 0
+                sku = (it.get("seller_sku") or it.get("sku") or it.get("msku") or it.get("fnsku") or "").strip()
+                qty = (_num(it.get("afn_fulfillable_quantity"))
+                       or _num(it.get("total_fulfillable_quantity"))
+                       or _num(it.get("quantity")) or _num(it.get("availableQty")))
                 if sku:
                     out[sku] = out.get(sku, 0) + qty
             if len(lst) < page_size:
@@ -165,25 +170,56 @@ class LingxingClient:
         return out
 
     def fetch_full_inventory(self, store_id_list=None, page_size=200):
-        """多平台 FULL 库存（中国仓/沃尔玛/其他等）。返回 {sku: {warehouse_bucket: qty}}。"""
+        """多平台 FULL 库存（中国仓/沃尔玛/其他等）。返回 {sku: {warehouse_bucket: qty}}。
+        不传 storeIdList 时拉取全部店铺库存，再按仓库名映射到本系统桶。
+        返回 data.records[]；SKU 取 sku/skc/goodsId，仓库取 warehouseName/whName/wname，
+        数量取 stockNum/availableQty/quantity。"""
         out = {}
         offset = 0
         while True:
             payload = {"length": page_size, "offset": offset,
-                       "selectTypeEnum": "COUNT_TYPE", "storeIdList": store_id_list or []}
-            data = self._post("/basicOpen/multiplatform/full/stockSearch", payload)
+                       "selectTypeEnum": "COUNT_TYPE", "hideZeroStorage": 0}
+            if store_id_list:
+                payload["storeIdList"] = store_id_list
+            data = self._post(FULL_STOCK_PATH, payload)
             lst = self._list(data)
             if not lst:
                 break
+            _first_keys(lst, "FULL")
             for it in lst:
-                sku = it.get("sku") or it.get("skc") or it.get("goodsId")
-                wh = it.get("warehouseName") or it.get("wname") or ""
-                qty = _num(it.get("quantity")) or 0
+                sku = (it.get("sku") or it.get("skc") or it.get("goodsId") or it.get("skuCode") or "").strip()
+                wh = it.get("warehouseName") or it.get("whName") or it.get("wname") or ""
+                qty = (_num(it.get("stockNum")) or _num(it.get("availableQty"))
+                       or _num(it.get("quantity")) or _num(it.get("stockQuantity")))
                 if sku and wh:
                     bucket = self._map_warehouse(wh)
                     if bucket:
                         out.setdefault(sku, {})
                         out[sku][bucket] = out[sku].get(bucket, 0) + qty
+            if len(lst) < page_size:
+                break
+            offset += page_size
+        return out
+
+    def fetch_temu_inventory(self, store_id_list=None, page_size=200):
+        """Temu 库存。返回 {sku: quantity}。返回 data.records[]。"""
+        out = {}
+        offset = 0
+        while True:
+            payload = {"length": page_size, "offset": offset}
+            if store_id_list:
+                payload["storeIdList"] = store_id_list
+            data = self._post(FBT_STOCK_PATH, payload)
+            lst = self._list(data)
+            if not lst:
+                break
+            _first_keys(lst, "FBT(temu)")
+            for it in lst:
+                sku = (it.get("skc") or it.get("sku") or it.get("skuCode") or "").strip()
+                qty = (_num(it.get("stockNum")) or _num(it.get("availableQty"))
+                       or _num(it.get("quantity")) or _num(it.get("stockQuantity")))
+                if sku:
+                    out[sku] = out.get(sku, 0) + qty
             if len(lst) < page_size:
                 break
             offset += page_size
@@ -198,43 +234,52 @@ class LingxingClient:
 
     def fetch_daily_sales(self, sid_list, start_date, end_date, page_size=200):
         """日销量（按 SKU、按日期）。返回 {sku: {yyyy-mm-dd: qty}}。
-
-        字段映射（领星日销量接口返回字段不统一，集中在此说明，便于按实际校准）：
-          SKU     ：it.get('sku') / 'sellerSku' / 'msku'
-          日期    ：it.get('date') / 'statDate' / 'saleDate' / 'daily'
-          销量    ：it.get('saleVolume') / 'salesVolume' / 'quantity' / 'units'
-        若贵司接口字段不同，改这里即可。
-        """
+        接口：platformStatisticsV2/saleStat/pageList（按日 date_unit=4、按 SKU data_type=4、销量 result_type=1）。
+        sids 接受数组（亚马逊 sid 与多平台 store_id 可混用）。"""
         out = {}
         for sid in sid_list:
             offset = 0
+            page = 1
             while True:
-                payload = {"sid": sid, "startDate": start_date, "endDate": end_date,
-                           "offset": offset, "length": page_size}
+                payload = {
+                    "sids": [sid],
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "result_type": "1",   # 销量
+                    "date_unit": "4",     # 日
+                    "data_type": "4",     # SKU
+                    "page": page,
+                    "length": page_size,
+                }
                 try:
                     data = self._post(DAILY_SALES_PATH, payload)
                 except LingxingError as e:
                     raise LingxingError(
                         f"日销量接口({DAILY_SALES_PATH})调用失败：{e}。"
-                        f"请按 apidoc.lingxing.com 校准该路径（环境变量 LINGXING_DAILY_SALES_PATH）与字段映射。"
+                        f"请按 apidoc.lingxing.com 校准路径（环境变量 LINGXING_DAILY_SALES_PATH）与字段映射。"
                     )
                 lst = self._list(data)
                 if not lst:
                     break
+                _first_keys(lst, "日销量")
                 for it in lst:
-                    sku = it.get("sku") or it.get("sellerSku") or it.get("msku")
-                    d = it.get("date") or it.get("statDate") or it.get("saleDate") or it.get("daily")
-                    qty = (_num(it.get("saleVolume")) or _num(it.get("salesVolume"))
-                           or _num(it.get("quantity")) or _num(it.get("units")))
+                    sku = (it.get("sku") or it.get("skuCode") or it.get("msku")
+                           or it.get("sellerSku") or it.get("seller_sku") or "").strip()
+                    d = (it.get("date") or it.get("statDate") or it.get("stat_date")
+                         or it.get("daily") or it.get("saleDate") or "")
+                    qty = (_num(it.get("saleVolume")) or _num(it.get("saleNum"))
+                           or _num(it.get("salesVolume")) or _num(it.get("quantity"))
+                           or _num(it.get("saleQty")))
                     if sku and d:
                         out.setdefault(sku, {})[str(d)[:10]] = out.get(sku, {}).get(str(d)[:10], 0) + qty
                 if len(lst) < page_size:
                     break
                 offset += page_size
+                page += 1
         return out
 
 
-# ===================== 同步到本地库 =====================
+# ===================== 同步到本地库 + 同步日志 =====================
 def _style_of(sku):
     s = str(sku)
     return s.split("-")[0].rstrip("Bb") if "-" in s else s
@@ -249,6 +294,23 @@ def _windows(daily, today):
             tot += daily.get(d, 0)
         return tot
     return s_last(3), s_last(7), s_last(14), s_last(30), s_last(60)
+
+
+def _write_sync_log(started_at, finished_at, status, detail, error):
+    """写入同步日志表（与业务库共用连接）。"""
+    try:
+        import sqlite3
+        from .database import DB_PATH
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.execute(
+            """INSERT INTO sync_log(started_at, finished_at, status, detail, error)
+               VALUES(?,?,?,?,?)""",
+            (started_at, finished_at, status, json.dumps(detail, ensure_ascii=False), error or ""),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:  # noqa
+        log.warning("写入同步日志失败（不影响主流程）：%s", e)
 
 
 def build_client_from_config(conn):
@@ -269,15 +331,18 @@ def _sid_list(cfg, key):
 
 
 def sync_from_lingxing():
-    """从领星 ERP 自动拉取销售/库存写入本地库。返回结果摘要。"""
+    """从领星 ERP 自动拉取销售/库存写入本地库，并写入同步日志。返回结果摘要。"""
     from .database import get_conn
     from .data_import import ensure_default_lifecycle
 
+    started_at = time.strftime("%Y-%m-%d %H:%M:%S")
     conn = get_conn()
     client, cfg = build_client_from_config(conn)
     if not client.is_configured():
         conn.close()
-        return {"ok": False, "error": "未配置领星凭证（lingxing_app_id / lingxing_app_secret）",
+        msg = "未配置领星凭证（lingxing_app_id / lingxing_app_secret）"
+        _write_sync_log(started_at, time.strftime("%Y-%m-%d %H:%M:%S"), "failed", {}, msg)
+        return {"ok": False, "error": msg,
                 "detail": "请在「系统设置 → 领星对接」中填写，或设置环境变量 LINGXING_APP_ID/SECRET。"}
 
     result = {"ok": True, "steps": [], "warnings": []}
@@ -289,7 +354,6 @@ def sync_from_lingxing():
     sids_walmart = _sid_list(cfg, "lingxing_sids_walmart")
     sids_other = _sid_list(cfg, "lingxing_sids_other")
     sids_temu = _sid_list(cfg, "lingxing_sids_temu")
-    all_sids = sids_amazon + sids_walmart + sids_other + sids_temu
 
     c = conn.cursor()
     try:
@@ -307,7 +371,6 @@ def sync_from_lingxing():
             except LingxingError as e:
                 result["warnings"].append(f"{platform} 日销量拉取失败：{e}")
                 continue
-            # 汇总跨店铺到 platform 桶
             merged = {}
             for sku, bydate in daily.items():
                 m = merged.setdefault(sku, {})
@@ -325,7 +388,7 @@ def sync_from_lingxing():
             result["steps"].append(f"{platform}: 销量已更新（{len(merged)} 个 SKU）")
 
         # ---------- 库存 ----------
-        # FBA（亚马逊）
+        # FBA（亚马逊）—— 用 sid（逗号串）
         if sids_amazon:
             try:
                 fba = client.fetch_fba_inventory(sids_amazon)
@@ -342,7 +405,7 @@ def sync_from_lingxing():
         else:
             result["steps"].append("FBA库存：未配置亚马逊 sid，跳过")
 
-        # Temu
+        # Temu —— 用 storeIdList（数组）
         if sids_temu:
             try:
                 temu = client.fetch_temu_inventory(sids_temu)
@@ -357,21 +420,20 @@ def sync_from_lingxing():
             except LingxingError as e:
                 result["warnings"].append(f"Temu库存拉取失败：{e}")
 
-        # 多平台 FULL（中国仓 / 沃尔玛 / 其他）
-        if all_sids:
-            try:
-                full = client.fetch_full_inventory(all_sids)
-                for sku, whmap in full.items():
-                    for wh, q in whmap.items():
-                        c.execute("INSERT OR IGNORE INTO skus(sku, style_code) VALUES(?,?)",
-                                  (sku, _style_of(sku)))
-                        c.execute(
-                            "INSERT OR REPLACE INTO inventory(sku, warehouse, quantity) VALUES(?,?,?)",
-                            (sku, wh, q),
-                        )
-                result["steps"].append(f"多平台库存已更新（{len(full)} 个 SKU）")
-            except LingxingError as e:
-                result["warnings"].append(f"多平台库存拉取失败：{e}")
+        # 多平台 FULL（中国仓 / 沃尔玛 / 其他）—— 全量拉取后按仓库名归桶
+        try:
+            full = client.fetch_full_inventory()  # 不传 storeIdList → 拉全部
+            for sku, whmap in full.items():
+                for wh, q in whmap.items():
+                    c.execute("INSERT OR IGNORE INTO skus(sku, style_code) VALUES(?,?)",
+                              (sku, _style_of(sku)))
+                    c.execute(
+                        "INSERT OR REPLACE INTO inventory(sku, warehouse, quantity) VALUES(?,?,?)",
+                        (sku, wh, q),
+                    )
+            result["steps"].append(f"多平台库存已更新（{len(full)} 个 SKU）")
+        except LingxingError as e:
+            result["warnings"].append(f"多平台库存拉取失败：{e}")
 
         ensure_default_lifecycle()
         c.execute(
@@ -382,9 +444,18 @@ def sync_from_lingxing():
     except LingxingError as e:
         conn.rollback()
         conn.close()
+        finished_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        _write_sync_log(started_at, finished_at, "failed", result, str(e))
         return {"ok": False, "error": str(e), "steps": result["steps"], "warnings": result["warnings"]}
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    finished_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    status = "partial" if result["warnings"] else "success"
+    _write_sync_log(started_at, finished_at, status, result, "")
     return result
 
 

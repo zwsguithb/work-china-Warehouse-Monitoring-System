@@ -195,5 +195,41 @@ document.getElementById("lxSaveBtn").addEventListener("click", async () => {
   loadLingxingStatus();
 });
 
+// ---------------- 同步日志 ----------------
+async function loadSyncLog() {
+  try {
+    const log = await getJSON("/api/lingxing/sync-log?limit=20");
+    const tbody = document.querySelector("#syncLogTable tbody");
+    tbody.innerHTML = "";
+    if (!log.items || log.items.length === 0) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 5; td.textContent = "暂无同步记录";
+      tr.appendChild(td); tbody.appendChild(tr);
+      return;
+    }
+    log.items.forEach(r => {
+      const tr = document.createElement("tr");
+      const steps = (r.steps || []).concat(r.warnings ? r.warnings.map(w => "⚠ " + w) : []);
+      const detail = r.error ? ("❌ " + r.error) : (steps.join("；") || "—");
+      const cells = [r.id, r.started_at, r.finished_at, r.status, detail];
+      cells.forEach((v, i) => {
+        const td = document.createElement("td");
+        td.textContent = v === null || v === undefined ? "—" : v;
+        if (i === 3) {
+          td.className = r.status === "success" ? "ok" : (r.status === "failed" ? "err" : "warn");
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+document.getElementById("lxLogBtn").addEventListener("click", loadSyncLog);
+
 loadAll().catch(e => alert("加载失败: " + e.message));
 loadLingxingStatus();
+loadSyncLog();

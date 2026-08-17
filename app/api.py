@@ -2,6 +2,7 @@
 """FastAPI 路由：数据同步、生命周期上传、四大看板接口、配置。"""
 import tempfile
 import os
+import json
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
@@ -110,6 +111,33 @@ def lingxing_test(payload: dict = None):
         app_secret=payload.get("app_secret") or cfg.get("lingxing_app_secret"),
         host=payload.get("host") or cfg.get("lingxing_host"),
     )
+
+
+@router.get("/api/lingxing/sync-log")
+def lingxing_sync_log(limit: int = 20):
+    """返回最近 N 条领星同步日志。"""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, started_at, finished_at, status, detail, error FROM sync_log "
+        "ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    items = []
+    for r in rows:
+        try:
+            detail = json.loads(r["detail"]) if r["detail"] else {}
+        except Exception:
+            detail = {}
+        items.append({
+            "id": r["id"],
+            "started_at": r["started_at"],
+            "finished_at": r["finished_at"],
+            "status": r["status"],
+            "steps": detail.get("steps", []),
+            "warnings": detail.get("warnings", []),
+            "error": r["error"],
+        })
+    return {"items": items}
 
 
 @router.post("/api/styles/lifecycle/upload")

@@ -88,12 +88,19 @@ uvicorn app.main:app --reload --port 8000
 
 ### 3. 同步逻辑
 - 前端点「立即从领星同步」或开启自动同步后每日定时调用；
-- 拉取 **FBA 库存**（`/basicOpen/openapi/storage/fbaWarehouseDetail`）、**temu 库存**（`/basicOpen/multiplatform/fbt/stockSearch`）、**多平台库存**（`/basicOpen/multiplatform/full/stockSearch`）、**日销量**；
+- 拉取以下**已按领星官方 apidoc.lingxing.com 固化的接口**：
+  | 数据 | 接口路径 | 关键参数 / 返回 |
+  |------|----------|----------------|
+  | FBA 库存（亚马逊） | `/basicOpen/openapi/storage/fbaWarehouseDetail` (v2) | `sid`(逗号串)；返回 `data.list` |
+  | 多平台库存（中国仓/沃尔玛/其他） | `/basicOpen/multiplatform/full/stockSearch` | `selectTypeEnum=COUNT_TYPE`；返回 `data.records` |
+  | Temu 库存 | `/basicOpen/multiplatform/fbt/stockSearch` | `storeIdList`；返回 `data.records` |
+  | 日销量（按日/按SKU） | `/basicOpen/platformStatisticsV2/saleStat/pageList` | `date_unit=4,data_type=4,result_type=1`；返回 `data[]` |
 - 日销量按近 3/7/14/30/60 天聚合为 `sales_agg` 的 d3/d7/d14/d30/d60，库存写入 `inventory` 表；
-- **容错**：未配置凭证 / 某接口失败 → 跳过该部分并在结果中给出 warning，不中断系统（仍可走 Excel 兜底）。
+- 每次同步（无论成败）写入 **同步日志表** `sync_log`，可在首页「⑥ 领星同步日志」查看；
+- **容错**：未配置凭证 / 某接口失败 → 跳过该部分并写 warning，不中断系统（仍可走 Excel 兜底）。
 
-### 4. 需要你按实际校准的点（重要）
-领星有 370+ 接口，文档见 apidoc.lingxing.com。本 MVP 已确认 **鉴权 + FBA/temu/多平台库存** 接口路径；**日销量接口路径与字段映射**因店铺/版本差异可能不同，集中在 `app/lingxing.py` 的 `DAILY_SALES_PATH` 常量与 `fetch_daily_sales` 方法内，若首次同步销量为空或报错，按 apidoc 调整该处即可（路径也可通过环境变量 `LINGXING_DAILY_SALES_PATH` 覆盖，无需改代码）。
+### 4. 字段映射校准（如需）
+接口路径已全部按官方文档固化。少数**返回字段名**可能因店铺/版本略有差异（如 FULL 库存的仓库名字段、数量字段），已做多候选兜底。若某平台数据为空，可在部署环境设 `LINGXING_DEBUG=1`，系统会在日志中打印首条记录的真实字段名，据此在 `app/lingxing.py` 对应 `fetch_*` 方法补充字段别名即可。所有路径也可通过环境变量覆盖（如 `LINGXING_DAILY_SALES_PATH`）。
 
 ## API 一览
 | 接口 | 方法 | 说明 |
@@ -103,6 +110,7 @@ uvicorn app.main:app --reload --port 8000
 | `/api/lingxing/status` | GET | 查看领星对接状态（不返回密钥明文） |
 | `/api/lingxing/config` | PUT | 配置领星凭证 / sid / 自动同步 |
 | `/api/lingxing/test` | POST | 测试领星凭证是否可用 |
+| `/api/lingxing/sync-log?limit=20` | GET | 查看领星同步日志（首页「⑥ 同步日志」用） |
 | `/api/styles/lifecycle/upload` | POST | 上传款号-生命周期 |
 | `/api/dashboard/eliminated` | GET | 淘汰款板块 |
 | `/api/dashboard/temu` | GET | temu 板块 |
@@ -115,3 +123,11 @@ uvicorn app.main:app --reload --port 8000
 - 后端 FastAPI + SQLite（MVP 用 SQLite，生产可平滑切换 PostgreSQL）；定时同步用 APScheduler。
 - 前端纯静态（HTML+JS），通过 fetch 调用 API，依赖 Chart.js CDN。
 - **领星对接**：`app/lingxing.py` 封装鉴权（access-token，约 2 小时有效期自动刷新）与四类数据接口，并写入 `sales_agg`/`inventory` 表；计算与看板逻辑（`app/calc.py`）无需改动，数据源切换对上层透明。
+- **CI/CD**：仓库已接入 GitHub Actions（`.github/workflows/ci.yml`），push 到 `main` 自动执行依赖安装 + 应用启动冒烟测试（首页/四大看板/领星状态/同步日志接口）。
+
+### 环境变量（可选，优先级高于设置页）
+| 变量 | 说明 |
+|------|------|
+| `LINGXING_APP_ID` / `LINGXING_APP_SECRET` / `LINGXING_HOST` | 领星凭证 |
+| `LINGXING_DEBUG=1` | 打印各接口首条记录真实字段名，便于校准字段映射 |
+| `LINGXING_FBA_STOCK_PATH` / `LINGXING_FULL_STOCK_PATH` / `LINGXING_FBT_STOCK_PATH` / `LINGXING_DAILY_SALES_PATH` | 覆盖各接口路径 |
