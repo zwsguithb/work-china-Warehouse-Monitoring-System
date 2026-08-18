@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install dependencies (import sanity)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -28,12 +28,15 @@ jobs:
           python -c "from app import database; database.init_db(); print('DB init OK')"
           python -c "import app.lingxing as lx; print('lingxing module OK; paths:', lx.FBA_STOCK_PATH, lx.FULL_STOCK_PATH, lx.FBT_STOCK_PATH, lx.DAILY_SALES_PATH)"
 
-      - name: Start server & smoke test endpoints
+      - name: Build Docker image
+        run: docker build -t cwms:ci .
+
+      - name: Run container & smoke test endpoints
         run: |
-          uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/cwms.log 2>&1 &
-          sleep 5
+          docker run -d --name cwms -p 8000:8000 cwms:ci
+          sleep 8
           curl -s -o /dev/null -w "index:%{http_code}\n" http://127.0.0.1:8000/
           curl -s http://127.0.0.1:8000/api/dashboard/eliminated | head -c 80; echo
-          curl -s http://127.0.0.1:8000/api/lingxing/status
+          curl -s http://127.0.0.1:8000/api/lingxing/status; echo
           curl -s "http://127.0.0.1:8000/api/lingxing/sync-log" | head -c 80; echo
-          pkill -f "uvicorn app.main" || true
+          docker rm -f cwms || true

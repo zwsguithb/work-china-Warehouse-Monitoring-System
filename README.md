@@ -49,6 +49,19 @@ uvicorn app.main:app --reload --port 8000
 ```
 浏览器打开 http://localhost:8000 即可看到看板（首次启动会自动写入演示数据）。
 
+## 容器化部署 (Docker)
+
+```bash
+# 构建并后台启动
+docker compose up -d --build
+# 访问 http://localhost:8000
+```
+
+- `./data` 通过 volume 持久化 SQLite 数据库，容器重建不丢数据；
+- 可在 `docker-compose.yml` 的 `environment` 中预置 `LINGXING_APP_ID` / `LINGXING_APP_SECRET`，使容器启动即对接领星 ERP；
+- `.dockerignore` 已排除 `*.db` 与 `.git`，本地数据库不会被打进镜像；
+- CI 流水线会 `docker build` 并启动容器做接口冒烟测试，保证镜像可正常出图运行。
+
 ## Excel 上传模板
 通过 `/api/data/sync` 与 `/api/styles/lifecycle/upload` 上传，字段（首行表头，不区分大小写）：
 
@@ -123,7 +136,7 @@ uvicorn app.main:app --reload --port 8000
 - 后端 FastAPI + SQLite（MVP 用 SQLite，生产可平滑切换 PostgreSQL）；定时同步用 APScheduler。
 - 前端纯静态（HTML+JS），通过 fetch 调用 API，依赖 Chart.js CDN。
 - **领星对接**：`app/lingxing.py` 封装鉴权（access-token，约 2 小时有效期自动刷新）与四类数据接口，并写入 `sales_agg`/`inventory` 表；计算与看板逻辑（`app/calc.py`）无需改动，数据源切换对上层透明。
-- **CI/CD**：仓库已接入 GitHub Actions（`.github/workflows/ci.yml`），push 到 `main` 自动执行依赖安装 + 应用启动冒烟测试（首页/四大看板/领星状态/同步日志接口）。
+- **CI/CD**：仓库已接入 GitHub Actions（`.github/workflows/ci.yml`），push 到 `main` 自动执行：Python 依赖安装 + 应用导入/建库校验 → **`docker build` 构建镜像** → 启动容器做接口冒烟测试（首页/四大看板/领星状态/同步日志接口）→ 清理容器。
 
 ### 环境变量（可选，优先级高于设置页）
 | 变量 | 说明 |
