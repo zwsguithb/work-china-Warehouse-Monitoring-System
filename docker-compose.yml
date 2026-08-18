@@ -5,12 +5,14 @@ services:
     build: .
     container_name: china-warehouse-monitor
     ports:
-      - "8000:8000"
+      - "8002:8002"
     volumes:
       # 持久化 SQLite 数据库，避免容器重建丢数据
       - ./data:/app/data
     restart: unless-stopped
     environment:
+      # 服务端口（与容器内 uvicorn 一致，避免与同机其它系统冲突）
+      - PORT=8002
       # 领星对接凭证（在系统页面「领星接入」面板填写亦可，此处用于容器启动即生效）
       - LINGXING_APP_ID=${LINGXING_APP_ID:-}
       - LINGXING_APP_SECRET=${LINGXING_APP_SECRET:-}
