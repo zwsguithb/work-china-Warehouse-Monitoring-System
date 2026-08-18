@@ -12,6 +12,6 @@ COPY . .
 # 数据目录持久化（运行时挂载 volume）
 RUN mkdir -p /app/data
 
-EXPOSE 8000
+EXPOSE 8002
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8002}"]
