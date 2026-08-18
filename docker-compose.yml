@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  cwms:
+    build: .
+    container_name: china-warehouse-monitor
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化 SQLite 数据库，避免容器重建丢数据
+      - ./data:/app/data
+    restart: unless-stopped
+    environment:
+      # 领星对接凭证（在系统页面「领星接入」面板填写亦可，此处用于容器启动即生效）
+      - LINGXING_APP_ID=${LINGXING_APP_ID:-}
+      - LINGXING_APP_SECRET=${LINGXING_APP_SECRET:-}
+      - LINGXING_DEBUG=${LINGXING_DEBUG:-0}
