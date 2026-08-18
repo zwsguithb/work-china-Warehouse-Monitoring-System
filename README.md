@@ -42,19 +42,22 @@ china-warehouse-monitor/
 ## 本地运行
 ```bash
 pip install -r requirements.txt
-# 方式一：直接运行（自动建库 + 灌入演示数据）
+# 方式一：直接运行（自动建库 + 灌入演示数据），端口读环境变量 PORT，默认 8002
 python -m app.main
-# 方式二：用 uvicorn
-uvicorn app.main:app --reload --port 8000
+# 方式二：用 uvicorn（端口可用 --port 或环境变量 PORT 指定）
+uvicorn app.main:app --reload --port 8002
+# 或自定义端口：PORT=9002 uvicorn app.main:app --host 0.0.0.0
 ```
-浏览器打开 http://localhost:8000 即可看到看板（首次启动会自动写入演示数据）。
+浏览器打开 http://localhost:8002 即可看到看板（首次启动会自动写入演示数据）。
+
+> **多系统共存**：本系统默认端口为 **8002**，与「备货系统」（默认 8001）等同类系统互不冲突；如需调整，统一用环境变量 `PORT` 即可。
 
 ## 容器化部署 (Docker)
 
 ```bash
-# 构建并后台启动
+# 构建并后台启动（端口 8002，见 docker-compose.yml）
 docker compose up -d --build
-# 访问 http://localhost:8000
+# 访问 http://localhost:8002
 ```
 
 - `./data` 通过 volume 持久化 SQLite 数据库，容器重建不丢数据；
